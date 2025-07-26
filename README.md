@@ -1,85 +1,76 @@
-# Clan DB API
+# Clan API - GCP Deployment Guide
 
-This is a FastAPI service deployed on Google Cloud Run with Cloud SQL (PostgreSQL) integration and Secret Manager for secure configuration.
+This README provides a step-by-step guide to deploy a FastAPI-based API on Google Cloud Run using Cloud Build, Secret Manager, and Cloud SQL for PostgreSQL.
 
 ---
 
 ## 🚀 Prerequisites
 
-1. **Enable Required GCP APIs:**
+Ensure the following are installed and configured:
 
 ```bash
-gcloud services enable run.googleapis.com sqladmin.googleapis.com secretmanager.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com
-```
-
-2. **Set Your GCP Project and Region:**
-
-```bash
-gcloud config set project [YOUR_PROJECT_ID]
-gcloud config set run/region us-central1
-```
-
-3. **Authenticate gcloud (if needed):**
-
-```bash
-gcloud auth login
+# Install Google Cloud SDK
+curl https://sdk.cloud.google.com | bash
+exec -l $SHELL
+gcloud init
 ```
 
 ---
 
-## 🛠️ Secret Manager Setup
-
-1. **Create Secret for Database URL:**
+## 🔧 Enable Required GCP Services
 
 ```bash
-echo "postgresql+psycopg2://[USERNAME]:[ENCODED_PASSWORD]@/[DB_NAME]?host=/cloudsql/[INSTANCE_CONNECTION_NAME]" \
-| gcloud secrets create DATABASE_URL --data-file=-
-```
-
-2. **Grant Access to Cloud Run Service Account:**
-
-```bash
-gcloud projects add-iam-policy-binding [PROJECT_ID] \
---member=serviceAccount:[PROJECT_NUMBER]-compute@developer.gserviceaccount.com \
---role=roles/secretmanager.secretAccessor
+gcloud services enable run.googleapis.com     cloudbuild.googleapis.com     secretmanager.googleapis.com     sqladmin.googleapis.com     artifactregistry.googleapis.com
 ```
 
 ---
 
-## 💾 Cloud SQL IAM Setup
-
-1. **Grant Cloud SQL Client Role to Service Account:**
+## 🗃️ Create PostgreSQL Instance on Cloud SQL
 
 ```bash
-gcloud projects add-iam-policy-binding [PROJECT_ID] \
---member=serviceAccount:[PROJECT_NUMBER]-compute@developer.gserviceaccount.com \
---role=roles/cloudsql.client
+gcloud sql instances create <INSTANCE_ID>     --database-version=POSTGRES_14     --tier=db-f1-micro     --region=us-central1
+```
+
+Create the database:
+
+```bash
+gcloud sql databases create <DB_NAME>     --instance=<INSTANCE_ID>
+```
+
+Create a user:
+
+```bash
+gcloud sql users create <DB_USER>     --instance=<INSTANCE_ID>     --password=<DB_PASSWORD>
 ```
 
 ---
 
-## 🐳 Docker & Build Setup
+## 🔐 Create Secrets
 
-Make sure your repo includes the following files:
-- `main.py` (FastAPI app)
+Store your PostgreSQL connection string in Secret Manager. Be sure to URL-encode any special characters in the password.
+
+```bash
+echo "postgresql+psycopg2://<DB_USER>:<ENCODED_PASSWORD>@/<DB_NAME>?host=/cloudsql/<PROJECT_ID>:<REGION>:<INSTANCE_ID>" | gcloud secrets create DATABASE_URL --data-file=-
+```
+
+Grant Secret Manager access to the Cloud Run service account:
+
+```bash
+gcloud projects add-iam-policy-binding <PROJECT_ID>     --member="serviceAccount:<PROJECT_NUMBER>-compute@developer.gserviceaccount.com"     --role="roles/secretmanager.secretAccessor"
+```
+
+---
+
+## 🐳 Docker & Cloud Build
+
+Ensure the following files exist in your repo:
+
 - `Dockerfile`
-- `requirements.txt`
 - `cloudbuild.yaml`
+- `main.py`
+- `requirements.txt`
 
-### Dockerfile Example:
-
-```Dockerfile
-FROM python:3.11
-
-WORKDIR /app
-COPY . .
-
-RUN pip install --no-cache-dir -r requirements.txt
-
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
-```
-
-### cloudbuild.yaml:
+### Sample `cloudbuild.yaml`
 
 ```yaml
 steps:
@@ -96,43 +87,46 @@ steps:
         '--platform', 'managed',
         '--region', 'us-central1',
         '--allow-unauthenticated',
-        '--set-secrets', 'DATABASE_URL=DATABASE_URL:latest',
-        '--add-cloudsql-instances', '[INSTANCE_CONNECTION_NAME]'
+        '--add-cloudsql-instances', '<PROJECT_ID>:us-central1:<INSTANCE_ID>',
+        '--set-secrets', 'DATABASE_URL=DATABASE_URL:latest'
       ]
 ```
 
 ---
 
-## 🔁 Deploy
-
-Submit build manually or set a trigger via GitHub/Cloud Source Repositories.
+## 🚀 Deploy with Cloud Build
 
 ```bash
-gcloud builds submit --config cloudbuild.yaml
+gcloud builds submit --project=<PROJECT_ID>
 ```
 
 ---
 
-## ✅ Test API
+## ✅ Test the API
 
-POST:
+Use `curl` or Thunder Client:
 
 ```bash
-curl -X POST https://[SERVICE_URL]/clans \
--H "Content-Type: application/json" \
--d '{"name": "Shadow Ninjas", "region": "Asia"}'
+curl -X POST https://<CLOUD_RUN_URL>/clans \
+     -H "Content-Type: application/json" \
+     -d '{"name": "Shadow Ninjas", "region": "Asia"}'
 ```
 
-GET:
+List:
 
 ```bash
-curl https://[SERVICE_URL]/clans
+curl https://<CLOUD_RUN_URL>/clans
 ```
 
 ---
 
-## 📌 Notes
+## ✅ Trigger on Push
 
-- Replace placeholders: `[PROJECT_ID]`, `[PROJECT_NUMBER]`, `[USERNAME]`, `[ENCODED_PASSWORD]`, `[DB_NAME]`, `[INSTANCE_CONNECTION_NAME]`, `[SERVICE_URL]`
-- Encode special characters in passwords for URLs.
-- Always redeploy after code or environment changes.
+You can create a trigger in Cloud Build UI to automatically build and deploy when new commits are pushed to your repository.
+
+---
+
+## 📁 Notes
+
+- Ensure your DB name matches exactly what’s in the connection string.
+- Use Secret Manager instead of hardcoding passwords or URLs.
